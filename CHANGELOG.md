@@ -2,6 +2,17 @@
 
 All notable changes to this package are documented here.
 
+## [0.1.1] — 2026-05-15
+
+### Fixed
+
+- Committed the `dist/` build output so git-tag installs work out of the
+  box. v0.1.0 was unusable when installed via `https://github.com/.../.git#v0.1.0`
+  because the package's `exports` field pointed at `./dist/...` which was
+  gitignored. v0.1.0 tag remains for history but should not be used. If we
+  ever ship this via npm, switch to a `prepare`-script flow instead of
+  committing `dist/`.
+
 ## [0.1.0] — 2026-05-15
 
 ### Added
