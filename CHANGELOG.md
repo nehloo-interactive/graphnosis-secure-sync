@@ -2,6 +2,24 @@
 
 All notable changes to this package are documented here.
 
+## [0.1.2] — 2026-05-18
+
+### Fixed
+
+- **`crypto`: replace `createRequire('libsodium-wrappers-sumo')` with a
+  static default import.** The previous pattern hid the dependency from
+  bundlers performing static analysis; Bun's `--compile` stripped it
+  from the output binary and the runtime then crashed at first encrypt
+  with `Cannot find package 'libsodium-wrappers-sumo'`. The new import
+  shape is bundler-friendly and runtime-identical (libsodium-wrappers-sumo
+  exports `module.exports = sodium`, which ESM interop hoists to the
+  default slot).
+
+  Consumers running plain Node are unaffected. Bundler-using consumers
+  must also override the libsodium package's broken ESM export map —
+  see the in-file comment in `src/crypto/index.ts` for the
+  `pnpm.packageExtensions` recipe.
+
 ## [0.1.1] — 2026-05-15
 
 ### Fixed
