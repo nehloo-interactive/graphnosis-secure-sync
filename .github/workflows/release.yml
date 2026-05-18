@@ -1,0 +1,69 @@
+name: GitHub Release
+
+# This package is INSTALLED VIA GIT TAG (not npm), so all we need on a
+# version bump is a matching GitHub Release with body text drawn from
+# the CHANGELOG. The release page is the only durable surface where
+# consumers see what changed between tags they pin to.
+#
+# No npm publish — secure-sync remains a private library while the App
+# is its only consumer. If/when it gets published to npm, add an
+# `npm publish` step alongside the release-create step. Pattern to
+# follow: see @nehloo/graphnosis's `.github/workflows/publish.yml`.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # `gh release create` needs write access to the Releases API.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Sanity check: CHANGELOG must have a matching version section ──
+      #
+      # We extract the section between `## [<TAG-without-v>]` and the next
+      # `## [` header and FAIL the workflow if it's empty. Prevents the
+      # historic failure mode where a release ships with no body text.
+      #
+      # CHANGELOG header convention here is `## [0.1.2] — 2026-…` (note
+      # the brackets), which differs from the SDK repo's `## v0.5.0`
+      # style — workflow regex is tuned for this repo's format.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          echo "Looking for CHANGELOG section: ## [$TAG]"
+          awk -v ver="[$TAG]" '
+            /^## / {
+              if (found) exit
+              for (i = 2; i <= NF; i++) {
+                if ($i == ver) { found = 1; next }
+              }
+            }
+            found
+          ' CHANGELOG.md > release_notes.md
+          # Strip leading/trailing blank lines so the GitHub Release body
+          # doesn't open with extra whitespace.
+          awk 'NF { p = 1 } p' release_notes.md > release_notes.trim
+          mv release_notes.trim release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "::error::No CHANGELOG.md section found for v$TAG. Add a '## [$TAG]' header before tagging."
+            exit 1
+          fi
+          echo "── release_notes.md preview ─────────────────"
+          head -20 release_notes.md
+          echo "── (truncated if longer) ────────────────────"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file release_notes.md
