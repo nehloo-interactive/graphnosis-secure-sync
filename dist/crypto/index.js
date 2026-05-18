@@ -1,9 +1,34 @@
-// libsodium-wrappers-sumo ships a broken ESM export map (points at a .mjs that
-// isn't in the tarball). Load via CJS createRequire — its CommonJS entry works.
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const sodium = require('libsodium-wrappers-sumo');
+// libsodium-wrappers-sumo@0.7.16 ships a broken ESM entry (its .mjs imports a
+// sibling `./libsodium-sumo.mjs` that the package doesn't include in its files
+// array). Bundlers that pick the ESM `import` condition therefore fail to
+// resolve. Consumers MUST override the package's exports so all conditions
+// resolve to the CJS file:
+//
+//   "pnpm": {
+//     "packageExtensions": {
+//       "libsodium-wrappers-sumo": {
+//         "exports": {
+//           ".": {
+//             "import":  "./dist/modules-sumo/libsodium-wrappers.js",
+//             "require": "./dist/modules-sumo/libsodium-wrappers.js",
+//             "default": "./dist/modules-sumo/libsodium-wrappers.js"
+//           }
+//         }
+//       }
+//     }
+//   }
+//
+// We use a static `import` (no `createRequire` indirection) so that bundlers
+// performing static analysis — Bun's `--compile`, esbuild, Vite, webpack —
+// can see the dependency and include it in the output bundle. The previous
+// `createRequire(import.meta.url)('libsodium-wrappers-sumo')` pattern made
+// the dep invisible to static analyzers; Bun's compiled binaries crashed at
+// runtime with "Cannot find package 'libsodium-wrappers-sumo'".
+//
+// Default-import works for both ESM and CJS variants because the package's
+// CJS entry sets `module.exports = sodium` (default export), which ESM
+// interop hoists to `import sodium from …`.
+import sodium from 'libsodium-wrappers-sumo';
 let ready = null;
 function init() {
     if (!ready)
