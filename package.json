@@ -1,6 +1,6 @@
 {
   "name": "@nehloo-interactive/graphnosis-secure-sync",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "Local-first encrypted storage + sync primitives extracted from Graphnosis App. Device-key derivation, encrypted append-only oplog, multi-graph query federation with budgets, sensitivity-tiered redaction.",

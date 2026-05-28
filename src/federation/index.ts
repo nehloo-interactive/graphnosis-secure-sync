@@ -85,7 +85,18 @@ export async function federatedQuery(
   }
 
   // Interleave across graphs by score, respecting both tier caps and the global budget.
-  filtered.sort((a, b) => b.score - a.score);
+  // Deterministic tie-breaker: when two candidates score identically (very common
+  // under entity anchoring's ANCHOR_SCORE constant, where every literal-entity
+  // match collapses to the same score), fall back to graphId then nodeId
+  // lexicographic order. Without this, ties are broken by the per-graph
+  // Promise.all completion order — which depends on I/O timing and produces
+  // non-deterministic "top result" placements across otherwise-identical
+  // recall calls.
+  filtered.sort((a, b) =>
+    (b.score - a.score) ||
+    a.graphId.localeCompare(b.graphId) ||
+    a.nodeId.localeCompare(b.nodeId),
+  );
 
   const byGraph = new Map<GraphId, CandidateNode[]>();
   let totalTokens = 0;

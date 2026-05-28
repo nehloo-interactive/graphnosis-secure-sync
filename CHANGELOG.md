@@ -2,6 +2,51 @@
 
 All notable changes to this package are documented here.
 
+## [0.1.3] — 2026-05-28
+
+### Fixed
+
+- **`federation.federatedQuery()`: deterministic tie-breaker on the
+  candidate sort.** When two or more candidates tied on score (very
+  common when consumers use a constant `ANCHOR_SCORE` for
+  literal-entity matches — every anchored node collapses to the same
+  numeric score), the final ordering was determined by V8's stable
+  sort over the input order. The input order was the per-graph
+  `Promise.all` completion order — which depends on disk I/O, ONNX
+  call timing, and other non-deterministic signals.
+
+  User-visible symptom: the same query against the same cortex
+  returned a different "top result" on consecutive runs at narrow
+  budgets (e.g. `maxNodes: 1` or `maxNodes: 3`). The Graphnosis App
+  saw this as a flickering "top node" chip in Memory Studio when
+  switching the slider position.
+
+  Fixed by adding `(graphId, nodeId)` lexicographic as the secondary
+  sort key:
+
+  ```ts
+  filtered.sort((a, b) =>
+    (b.score - a.score) ||
+    a.graphId.localeCompare(b.graphId) ||
+    a.nodeId.localeCompare(b.nodeId),
+  );
+  ```
+
+  The exact tie-breaker doesn't carry semantic meaning — what matters
+  is that it's documented and consistent so the same query at
+  different budgets always shows the same node at #1. Verified by the
+  Graphnosis App's `recall.test.ts` H8 block (slider-equivalent
+  stability): the assertion was promoted from "top-1 contains
+  keyword" to "top-1 is the SAME node at every budget" and passes
+  5/5 consecutive runs.
+
+### Note for consumers
+
+Anyone whose application relied on the previous (undefined) ordering
+will see a stable change in which tied candidate surfaces first. In
+practice this is exactly the intended behaviour — ordering should be
+predictable.
+
 ## [0.1.2] — 2026-05-18
 
 ### Fixed
