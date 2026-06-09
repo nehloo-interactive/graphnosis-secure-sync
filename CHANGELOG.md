@@ -2,6 +2,47 @@
 
 All notable changes to this package are documented here.
 
+## [0.2.0] — 2026-06-09
+
+Security release. Authenticated, tamper-evident op-log; a recovery-wrap fix; and
+hardening of at-rest file permissions and the federation tier guard.
+
+### Security
+
+- **Op-log v2: per-device Ed25519 signatures + monotonic sequence (format
+  change).** Op-log chunks were AEAD-encrypted with the shared cortex key but
+  carried no per-device authentication or sequence number, so a party with
+  write access to the synced directory could drop, truncate, reorder, or replay
+  whole chunks undetected, and a party holding the data key could forge events
+  for any device. v2 signs every chunk with the originating device's Ed25519 key
+  (verified against a TOFU-pinned public key) and stamps each event with a
+  strictly-monotonic per-device `seq`. The reader now detects gaps (drops),
+  rewinds (replays), and reorders, **clamps future timestamps** so a poisoned
+  `ts` can't win last-writer-wins, and **surfaces integrity problems loudly**
+  instead of silently skipping them. Legacy v1 files are still read
+  (grandfathered). Verification is opt-in via `readAllEvents`'s new
+  `getDevicePubKey` / `onIntegrityIssue` options. New `OpLogEvent.seq`,
+  `OpLogIntegrityIssue`, `OPLOG_V2_MAGIC`, `encodeSignedChunk`, and Ed25519
+  helpers (`generateSigningKeyPair`, `sign`, `verify`) in `crypto`.
+- **`makeRecoveryWrap` derived its key and stored salt from two independent
+  Argon2id passes** — the wrapping key came from salt A while the blob stored
+  salt B, so `unwrapRecovery` could never recover the key and every recovery
+  wrap was permanently undecryptable. Now derives once and reuses. **Any
+  recovery phrase generated before this release is non-functional; users must
+  regenerate it.**
+- **Sensitive-tier federation backstop.** `shouldShare` / `shareableGraphs` now
+  treat a `sensitive`-tier engram as never-shareable regardless of its
+  `shareWithAi` flag, an independent guard against a policy that decouples the
+  two axes (e.g. an env-supplied policy) and flips `shareWithAi:true` on a
+  sensitive engram.
+- **Restrictive at-rest permissions.** The op-log directory and files are now
+  created `0o700` / `0o600` so other local users can't read or copy them.
+
+### Notes
+
+- Op-log v2 is a backward-incompatible file format (older readers can't parse v2
+  files). v1 files remain readable by this version. Hence the minor bump.
+
 ## [0.1.3] — 2026-05-28
 
 ### Fixed

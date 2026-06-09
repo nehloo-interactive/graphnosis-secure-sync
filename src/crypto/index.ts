@@ -123,12 +123,57 @@ export async function decrypt(ciphertext: Uint8Array, passphraseOrKey: string | 
 // BIP-39-style recovery phrase: a separately-encrypted copy of the data-encryption key.
 // The phrase is the entropy source for an Argon2id key that wraps the real key.
 export async function makeRecoveryWrap(dataKey: Uint8Array, recoveryPhrase: string): Promise<Uint8Array> {
-  return encrypt(dataKey, (await deriveKey(recoveryPhrase)).key, (await deriveKey(recoveryPhrase)).salt);
+  // Derive ONCE: the wrapping key and the salt stored in the blob must come from the
+  // same Argon2id pass. Calling deriveKey twice mints two independent random salts —
+  // the key would be derived under salt A while the blob stores salt B, so
+  // unwrapRecovery (which re-derives the key from the stored salt) could never recover
+  // it. That made every recovery wrap permanently undecryptable.
+  const dk = await deriveKey(recoveryPhrase);
+  return encrypt(dataKey, dk.key, dk.salt);
 }
 
 export async function unwrapRecovery(blob: Uint8Array, recoveryPhrase: string): Promise<Uint8Array> {
   return decrypt(blob, recoveryPhrase);
 }
+
+// ── Ed25519 device-identity signatures (op-log v2) ──────────────────────────
+//
+// Each device owns an Ed25519 keypair. Op-log chunks are signed so a party that
+// merely holds the shared data key (e.g. a stolen synced copy) cannot forge
+// events attributed to *another* device. libsodium provides the primitives;
+// these are thin wrappers that ensure `sodium.ready` before use.
+
+export interface SigningKeyPair {
+  publicKey: Uint8Array;  // 32 bytes
+  secretKey: Uint8Array;  // 64 bytes (libsodium secret key)
+}
+
+export async function generateSigningKeyPair(): Promise<SigningKeyPair> {
+  await init();
+  const kp = sodium.crypto_sign_keypair();
+  return { publicKey: kp.publicKey, secretKey: kp.privateKey };
+}
+
+/** Detached Ed25519 signature (64 bytes) over `message`. */
+export async function sign(message: Uint8Array, secretKey: Uint8Array): Promise<Uint8Array> {
+  await init();
+  return sodium.crypto_sign_detached(message, secretKey);
+}
+
+/** Verify a detached Ed25519 signature. Returns false on any malformed input
+ *  rather than throwing, so a bad chunk is a rejection, not a crash. */
+export async function verify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): Promise<boolean> {
+  await init();
+  try {
+    return sodium.crypto_sign_verify_detached(signature, message, publicKey);
+  } catch {
+    return false;
+  }
+}
+
+export const SIGN_PUBLICKEYBYTES = 32;
+export const SIGN_SECRETKEYBYTES = 64;
+export const SIGN_BYTES = 64;
 
 function concat(parts: Uint8Array[]): Uint8Array {
   let len = 0;

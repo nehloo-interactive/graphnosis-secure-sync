@@ -15,6 +15,13 @@ export function tierOf(cfg, graphId) {
 }
 export function shouldShare(cfg, graphId) {
     const g = cfg.graphs.find(x => x.graphId === graphId);
+    // Hard backstop: a `sensitive`-tier engram is NEVER federated to an AI,
+    // regardless of its `shareWithAi` flag. The two axes are settable
+    // independently (and an env-supplied GRAPHNOSIS_POLICY bypasses the host's
+    // safety derivation that normally forces shareWithAi=false for sensitive), so
+    // this re-checks the tier here as an independent guard against that decoupling.
+    if (g?.tier === 'sensitive')
+        return false;
     return g ? g.shareWithAi : true;
 }
 export function shareableGraphs(cfg, graphIds) {
