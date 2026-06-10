@@ -55,8 +55,16 @@ export async function federatedQuery(
   query: string,
   cfg: PolicyConfig,
   budget: SubgraphBudget = DEFAULT_BUDGET,
+  /**
+   * Engrams the caller has explicitly authorised (e.g. an app-side per-engram
+   * consent gate approved an explicitly-named sensitive engram). These bypass
+   * the shareability filter so a consented sensitive recall actually returns
+   * data — still clamped by the per-tier budget cap. Proactive recall passes
+   * nothing here, so sensitive stays excluded by default.
+   */
+  allowGraphIds?: GraphId[],
 ): Promise<FederatedSubgraph> {
-  const shareable = shareableGraphs(cfg, graphIds);
+  const shareable = shareableGraphs(cfg, graphIds, allowGraphIds);
   const perGraphK = Math.max(5, Math.ceil(budget.maxNodes / Math.max(1, shareable.length)) * 2);
 
   // Run all per-graph queries in parallel.

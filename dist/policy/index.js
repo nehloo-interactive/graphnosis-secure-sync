@@ -24,8 +24,15 @@ export function shouldShare(cfg, graphId) {
         return false;
     return g ? g.shareWithAi : true;
 }
-export function shareableGraphs(cfg, graphIds) {
-    return graphIds.filter(g => shouldShare(cfg, g));
+export function shareableGraphs(cfg, graphIds, allowGraphIds) {
+    // `allowGraphIds` is an explicit allow-list for engrams the CALLER has already
+    // authorised out-of-band (e.g. the app's per-engram consent gate approved an
+    // explicitly-named sensitive engram). Those bypass the share filter — but only
+    // the share filter; the per-tier budget cap in `budgetFor` still clamps how
+    // much they can contribute (sensitive = 500 tok / 5 nodes). Without an
+    // allow-list this is unchanged: sensitive stays non-shareable (proactive
+    // recall never leaks it).
+    return graphIds.filter(g => shouldShare(cfg, g) || allowGraphIds?.includes(g));
 }
 /** Per-graph budget = min(requested, tier cap). */
 export function budgetFor(cfg, graphId, requested) {

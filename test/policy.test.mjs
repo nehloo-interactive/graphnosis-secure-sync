@@ -28,3 +28,20 @@ test('shareableGraphs excludes the sensitive engram', () => {
   const out = shareableGraphs(cfg, ['public-notes', 'personal-misc', 'secrets']);
   assert.deepEqual(out.sort(), ['personal-misc', 'public-notes']);
 });
+
+test('allowGraphIds lets an explicitly-consented sensitive engram through', () => {
+  // The app passes this after its per-engram consent gate approves an
+  // explicitly-named sensitive engram. The tier cap (applied elsewhere) still
+  // clamps how much it can contribute.
+  const out = shareableGraphs(cfg, ['public-notes', 'secrets'], ['secrets']);
+  assert.deepEqual(out.sort(), ['public-notes', 'secrets']);
+});
+
+test('allowGraphIds only affects listed engrams (others still gated)', () => {
+  const cfg2 = { defaultBudget: DEFAULT_BUDGET, graphs: [
+    { graphId: 'health', shareWithAi: true, tier: 'sensitive' },
+    { graphId: 'finances', shareWithAi: true, tier: 'sensitive' },
+  ]};
+  const out = shareableGraphs(cfg2, ['health', 'finances'], ['health']);
+  assert.deepEqual(out, ['health']); // finances stays excluded
+});

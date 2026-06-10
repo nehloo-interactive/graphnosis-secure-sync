@@ -19,7 +19,7 @@ export declare const TIER_CAPS: Record<SensitivityTier, {
 }>;
 export declare function tierOf(cfg: PolicyConfig, graphId: GraphId): SensitivityTier;
 export declare function shouldShare(cfg: PolicyConfig, graphId: GraphId): boolean;
-export declare function shareableGraphs(cfg: PolicyConfig, graphIds: GraphId[]): GraphId[];
+export declare function shareableGraphs(cfg: PolicyConfig, graphIds: GraphId[], allowGraphIds?: GraphId[]): GraphId[];
 /** Per-graph budget = min(requested, tier cap). */
 export declare function budgetFor(cfg: PolicyConfig, graphId: GraphId, requested: SubgraphBudget): {
     maxTokens: number;

@@ -2,6 +2,22 @@
 
 All notable changes to this package are documented here.
 
+## [0.2.1] — 2026-06-09
+
+### Changed
+
+- **`shareableGraphs` / `federatedQuery` accept an optional `allowGraphIds`
+  explicit allow-list.** Engrams the caller has authorised out-of-band (e.g. an
+  app-side per-engram consent gate that approved an explicitly-named sensitive
+  engram) bypass the shareability filter so a consented sensitive recall
+  actually returns data — still clamped by the per-tier budget cap (sensitive =
+  500 tokens / 5 nodes). Without an allow-list behavior is unchanged: sensitive
+  stays non-shareable, so proactive recall never leaks it. This fixes the case
+  where a sensitive engram returned zero data to the AI even when explicitly
+  named and consented. The `sensitive`-tier backstop from 0.2.0 (`shouldShare`
+  hard-stops sensitive) remains the default; the allow-list is an explicit,
+  per-call override.
+
 ## [0.2.0] — 2026-06-09
 
 Security release. Authenticated, tamper-evident op-log; a recovery-wrap fix; and
