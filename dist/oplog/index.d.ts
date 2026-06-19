@@ -53,7 +53,16 @@ export interface ReadOpLogOptions {
     /** Injectable clock for tests. Defaults to Date.now(). */
     now?: number;
 }
+/** Tail-read boundary for incremental op-log reconcile (op-log v2 / Batch 6). */
+export interface ReadEventsSinceOptions extends ReadOpLogOptions {
+    /** Inclusive high-water ts from the last successful reconcile checkpoint. */
+    sinceTs: number;
+    /** When set, events at exactly `sinceTs` with seq ≤ this value are skipped. */
+    sinceSeq?: number;
+}
 export declare function readAllEvents(dir: string, passphraseOrKey: string | Uint8Array, opts?: ReadOpLogOptions): Promise<OpLogEvent[]>;
+/** Read op-log events strictly after a reconcile checkpoint (tail replay). */
+export declare function readEventsSince(dir: string, passphraseOrKey: string | Uint8Array, since: ReadEventsSinceOptions): Promise<OpLogEvent[]>;
 export declare function reduce(events: OpLogEvent[]): Map<GraphId, MaterializedGraphState>;
 export interface MaterializedGraphState {
     nodes: Map<string, {

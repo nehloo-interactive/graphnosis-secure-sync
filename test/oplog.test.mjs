@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OpLogWriter, readAllEvents } from '../dist/oplog/index.js';
+import { OpLogWriter, readAllEvents, readEventsSince } from '../dist/oplog/index.js';
 import { deriveKey, generateSigningKeyPair } from '../dist/crypto/index.js';
 
 function freshDir() { return mkdtempSync(join(tmpdir(), 'gn-oplog-')); }
@@ -141,6 +141,39 @@ test('future-timestamp events are clamped (dropped)', async () => {
   });
   assert.equal(events.length, 0);
   assert.ok(issues.some((i) => i.kind === 'future-timestamp'));
+});
+
+test('readEventsSince returns only events after checkpoint', async () => {
+  const dir = freshDir();
+  const { key, salt, kp } = await setup();
+  const w = new OpLogWriter({ dir, deviceId: 'devA', key, salt, signSecretKey: kp.secretKey });
+  const readOpts = {
+    getDevicePubKey: () => kp.publicKey,
+    onIntegrityIssue: () => {},
+  };
+
+  let checkpoint = { maxTs: 0, maxSeq: -1 };
+  for (let i = 0; i < 100; i++) {
+    const emitted = w.emit({ ...ev(`pre-${i}`), ts: 1000 + i, seq: i });
+    if (i === 99) checkpoint = { maxTs: emitted.ts, maxSeq: emitted.seq };
+  }
+  await flushAll(w);
+
+  for (let i = 100; i < 110; i++) {
+    w.emit({ ...ev(`tail-${i}`), ts: 1000 + i, seq: i });
+  }
+  await flushAll(w);
+
+  const all = await readAllEvents(dir, key, readOpts);
+  assert.equal(all.length, 110);
+
+  const tail = await readEventsSince(dir, key, {
+    ...readOpts,
+    sinceTs: checkpoint.maxTs,
+    sinceSeq: checkpoint.maxSeq,
+  });
+  assert.equal(tail.length, 10, `expected 10 tail events, got ${tail.length}`);
+  assert.ok(tail.every((e) => e.target.id.startsWith('tail-')));
 });
 
 test('legacy v1 (unsigned) files are still read', async () => {

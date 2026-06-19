@@ -2,6 +2,16 @@
 
 All notable changes to this package are documented here.
 
+## [0.2.2] — 2026-06-19
+
+### Added
+
+- **`readEventsSince(dir, key, { sinceTs, sinceSeq?, ...readOpts })`** — tail-read
+  helper for incremental op-log reconcile. Returns events with `ts > sinceTs`, or
+  at `sinceTs` with `seq > sinceSeq` when `sinceSeq` is set. Shares integrity
+  verification and future-ts clamping with `readAllEvents`; only the returned
+  array is filtered (callers still decrypt all chunks on disk today).
+
 ## [0.2.1] — 2026-06-09
 
 ### Changed

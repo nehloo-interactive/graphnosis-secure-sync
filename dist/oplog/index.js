@@ -120,7 +120,20 @@ async function buildV2Chunk(deviceId, startSeq, count, ct, signSecretKey) {
  * spamming the dev terminal across repeated reads in one session.
  */
 const warnedOplogFiles = new Set();
-export async function readAllEvents(dir, passphraseOrKey, opts = {}) {
+function isAfterCheckpoint(ev, sinceTs, sinceSeq) {
+    if (ev.ts > sinceTs)
+        return true;
+    if (ev.ts < sinceTs)
+        return false;
+    if (sinceSeq === undefined)
+        return false;
+    return typeof ev.seq === 'number' && ev.seq > sinceSeq;
+}
+function sortEvents(events) {
+    events.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+    return events;
+}
+async function collectOplogFromDir(dir, passphraseOrKey, opts, filter) {
     const out = [];
     const now = opts.now ?? Date.now();
     const maxSkew = opts.maxClockSkewMs ?? DEFAULT_MAX_CLOCK_SKEW_MS;
@@ -150,11 +163,19 @@ export async function readAllEvents(dir, passphraseOrKey, opts = {}) {
                     detail: `event ts ${ev.ts} exceeds now+${maxSkew}ms; dropped` });
                 continue;
             }
-            out.push(ev);
+            if (!filter || filter(ev))
+                out.push(ev);
         }
     }
-    out.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
-    return out;
+    return sortEvents(out);
+}
+export async function readAllEvents(dir, passphraseOrKey, opts = {}) {
+    return collectOplogFromDir(dir, passphraseOrKey, opts);
+}
+/** Read op-log events strictly after a reconcile checkpoint (tail replay). */
+export async function readEventsSince(dir, passphraseOrKey, since) {
+    const { sinceTs, sinceSeq, ...opts } = since;
+    return collectOplogFromDir(dir, passphraseOrKey, opts, (ev) => isAfterCheckpoint(ev, sinceTs, sinceSeq));
 }
 /** v2: magic, then repeated signed chunks. Verifies signature + content hash. */
 async function readV2File(u8, name, passphraseOrKey, opts, issue) {

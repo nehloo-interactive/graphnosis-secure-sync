@@ -180,10 +180,31 @@ export interface ReadOpLogOptions {
   now?: number;
 }
 
-export async function readAllEvents(
+/** Tail-read boundary for incremental op-log reconcile (op-log v2 / Batch 6). */
+export interface ReadEventsSinceOptions extends ReadOpLogOptions {
+  /** Inclusive high-water ts from the last successful reconcile checkpoint. */
+  sinceTs: number;
+  /** When set, events at exactly `sinceTs` with seq ≤ this value are skipped. */
+  sinceSeq?: number;
+}
+
+function isAfterCheckpoint(ev: OpLogEvent, sinceTs: number, sinceSeq?: number): boolean {
+  if (ev.ts > sinceTs) return true;
+  if (ev.ts < sinceTs) return false;
+  if (sinceSeq === undefined) return false;
+  return typeof ev.seq === 'number' && ev.seq > sinceSeq;
+}
+
+function sortEvents(events: OpLogEvent[]): OpLogEvent[] {
+  events.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+  return events;
+}
+
+async function collectOplogFromDir(
   dir: string,
   passphraseOrKey: string | Uint8Array,
-  opts: ReadOpLogOptions = {},
+  opts: ReadOpLogOptions,
+  filter?: (ev: OpLogEvent) => boolean,
 ): Promise<OpLogEvent[]> {
   const out: OpLogEvent[] = [];
   const now = opts.now ?? Date.now();
@@ -217,12 +238,34 @@ export async function readAllEvents(
           detail: `event ts ${ev.ts} exceeds now+${maxSkew}ms; dropped` });
         continue;
       }
-      out.push(ev);
+      if (!filter || filter(ev)) out.push(ev);
     }
   }
 
-  out.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
-  return out;
+  return sortEvents(out);
+}
+
+export async function readAllEvents(
+  dir: string,
+  passphraseOrKey: string | Uint8Array,
+  opts: ReadOpLogOptions = {},
+): Promise<OpLogEvent[]> {
+  return collectOplogFromDir(dir, passphraseOrKey, opts);
+}
+
+/** Read op-log events strictly after a reconcile checkpoint (tail replay). */
+export async function readEventsSince(
+  dir: string,
+  passphraseOrKey: string | Uint8Array,
+  since: ReadEventsSinceOptions,
+): Promise<OpLogEvent[]> {
+  const { sinceTs, sinceSeq, ...opts } = since;
+  return collectOplogFromDir(
+    dir,
+    passphraseOrKey,
+    opts,
+    (ev) => isAfterCheckpoint(ev, sinceTs, sinceSeq),
+  );
 }
 
 /** v2: magic, then repeated signed chunks. Verifies signature + content hash. */
