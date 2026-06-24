@@ -351,9 +351,13 @@ function checkSequenceContinuity(events, file, issue) {
         }
     }
 }
-// Deterministic merge: per (graphId, target.id) last-writer-wins by ts,
-// tie-break by deviceId. The reader has already dropped future-ts events, so a
-// poisoned timestamp can no longer win here.
+// Deterministic merge: per (graphId, target.id) last-writer-wins under the
+// strict total order (ts, deviceId, seq). The reader has already dropped
+// future-ts events, so a poisoned timestamp can no longer win here. The seq
+// tie-break makes the merge order-independent even when one device emits two
+// events for the same target in the same millisecond; deletes are retained as
+// ranked tombstones during the merge and swept afterward, so order-independence
+// extends to delete/set interleavings too (Theorem 2 over the full event set).
 export function reduce(events) {
     const graphs = new Map();
     for (const ev of events) {
@@ -364,6 +368,18 @@ export function reduce(events) {
         }
         applyEvent(g, ev);
     }
+    // Sweep tombstones: deletes were kept as ranked tombstones so they correctly
+    // suppress lower-ranked sets regardless of merge order; the externally visible
+    // state omits them. The sweep is order-independent (it removes every tombstone
+    // unconditionally), so materialize(π(E)) = materialize(E) for any permutation π.
+    for (const g of graphs.values()) {
+        for (const bucket of [g.nodes, g.edges, g.sources]) {
+            for (const [id, entry] of bucket) {
+                if (entry.deleted)
+                    bucket.delete(id);
+            }
+        }
+    }
     return graphs;
 }
 function applyEvent(g, ev) {
@@ -371,15 +387,33 @@ function applyEvent(g, ev) {
         ev.target.kind === 'edge' ? g.edges :
             g.sources;
     const existing = bucket.get(ev.target.id);
+    // Strict total order (ts, deviceId, seq). seq is the strictly-monotonic
+    // per-device sequence number, so two events from the same device at the same
+    // ts can never tie — making the merge order-independent (Theorem 2) even in
+    // the degenerate same-device, same-millisecond case. Legacy v1 events carry
+    // no seq and fall back to (ts, deviceId) ordering.
     const wins = !existing || ev.ts > existing.ts ||
-        (ev.ts === existing.ts && ev.deviceId > existing.deviceId);
+        (ev.ts === existing.ts && ev.deviceId > existing.deviceId) ||
+        (ev.ts === existing.ts && ev.deviceId === existing.deviceId && (ev.seq ?? 0) > (existing.seq ?? 0));
     if (!wins)
         return;
     if (ev.op === 'deleteNode' || ev.op === 'deleteEdge' || ev.op === 'forgetSource') {
-        bucket.delete(ev.target.id);
+        // Tombstone, not removal. A delete that wins the (ts, deviceId, seq) max is
+        // recorded as a ranked tombstone so that a lower-ranked set from another
+        // device cannot resurrect the entry merely by arriving later in merge
+        // order. Tombstones are swept from the externally visible state at the end
+        // of reduce(). This is what extends Theorem 2's order-independence from the
+        // upsert sublattice to the full event set including deletes.
+        bucket.set(ev.target.id, {
+            data: null, ts: ev.ts, deviceId: ev.deviceId, deleted: true,
+            ...(ev.seq !== undefined ? { seq: ev.seq } : {}),
+        });
         return;
     }
-    bucket.set(ev.target.id, { data: ev.after, ts: ev.ts, deviceId: ev.deviceId });
+    bucket.set(ev.target.id, {
+        data: ev.after, ts: ev.ts, deviceId: ev.deviceId,
+        ...(ev.seq !== undefined ? { seq: ev.seq } : {}),
+    });
 }
 // ── byte helpers ────────────────────────────────────────────────────────────
 function prefixLen(chunk) {

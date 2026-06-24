@@ -2,6 +2,22 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.0] — 2026-06-23
+
+### Changed
+
+- **Deterministic LWW merge.** Last-writer-wins is now resolved by a strict
+  total order over `(timestamp, deviceId, seq)` instead of timestamp alone, so
+  concurrent operations with equal timestamps converge identically regardless
+  of arrival order. Delete operations leave tombstones, so deletes commute with
+  concurrent edits. The reduction is permutation-invariant — the same set of
+  operations always yields the same state (Theorem 2 determinism).
+
+### Tests
+
+- Added 4 permutation/determinism cases asserting order-independent
+  convergence and tombstone behaviour (full suite green).
+
 ## [0.2.2] — 2026-06-19
 
 ### Added

@@ -69,16 +69,22 @@ export interface MaterializedGraphState {
         data: unknown;
         ts: number;
         deviceId: DeviceId;
+        seq?: number;
+        deleted?: boolean;
     }>;
     edges: Map<string, {
         data: unknown;
         ts: number;
         deviceId: DeviceId;
+        seq?: number;
+        deleted?: boolean;
     }>;
     sources: Map<string, {
         data: unknown;
         ts: number;
         deviceId: DeviceId;
+        seq?: number;
+        deleted?: boolean;
     }>;
 }
 //# sourceMappingURL=index.d.ts.map

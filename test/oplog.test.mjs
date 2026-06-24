@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OpLogWriter, readAllEvents, readEventsSince } from '../dist/oplog/index.js';
+import { OpLogWriter, readAllEvents, readEventsSince, reduce } from '../dist/oplog/index.js';
 import { deriveKey, generateSigningKeyPair } from '../dist/crypto/index.js';
 
 function freshDir() { return mkdtempSync(join(tmpdir(), 'gn-oplog-')); }
@@ -190,4 +190,81 @@ test('legacy v1 (unsigned) files are still read', async () => {
     onIntegrityIssue: (i) => issues.push(i),
   });
   assert.equal(events.length, 2, 'legacy events must be grandfathered');
+});
+
+// ── Theorem 2: LWW merge determinism (reduce is permutation-invariant) ───────
+// materialize(π(E)) = materialize(E) for any permutation π. The (ts, deviceId,
+// seq) order is strict-total (seq is unique per device); tombstoned deletes
+// extend order-independence to delete/set interleavings.
+
+function permutations(arr) {
+  if (arr.length <= 1) return [arr];
+  const out = [];
+  for (let i = 0; i < arr.length; i++) {
+    const rest = [...arr.slice(0, i), ...arr.slice(i + 1)];
+    for (const p of permutations(rest)) out.push([arr[i], ...p]);
+  }
+  return out;
+}
+const node = (op, id, ts, deviceId, seq, after) =>
+  ({ graphId: 'g1', op, target: { kind: 'node', id }, ts, deviceId, seq, after });
+// Canonical snapshot of graph g1's surviving nodes: "id=data" pairs, sorted.
+function snapshot(events) {
+  const g = reduce(events).get('g1');
+  if (!g) return '<empty>';
+  const s = [...g.nodes.entries()].map(([id, e]) => `${id}=${JSON.stringify(e.data)}`).sort().join('|');
+  return s || '<empty>';
+}
+function allPermsAgree(events) {
+  const perms = permutations(events);
+  const outcomes = new Set(perms.map(snapshot));
+  return { distinct: outcomes.size, only: [...outcomes][0], count: perms.length };
+}
+
+test('reduce determinism: same-device same-ts upserts → highest seq wins, order-independent', () => {
+  const events = [
+    node('addNode', 'K', 100, 'devA', 0, 'A0'),
+    node('addNode', 'K', 100, 'devA', 1, 'A1'),
+    node('addNode', 'K', 100, 'devA', 2, 'A2'),
+  ];
+  const r = allPermsAgree(events);
+  assert.equal(r.distinct, 1, `expected one outcome across ${r.count} permutations, got ${r.distinct}`);
+  assert.equal(r.only, 'K="A2"', 'highest seq (A2) must win');
+});
+
+test('reduce determinism: cross-device delete/set interleave is order-independent (tombstone)', () => {
+  // devB sets K at ts=3; devA deletes K at ts=5. The newer delete outranks the
+  // set → K absent regardless of merge order. Without tombstones this case was
+  // order-dependent (delete-first → resurrected; set-first → deleted).
+  const events = [
+    node('addNode', 'K', 3, 'devB', 0, 'B-set'),
+    node('deleteNode', 'K', 5, 'devA', 0, null),
+  ];
+  const r = allPermsAgree(events);
+  assert.equal(r.distinct, 1, `delete/set interleave must be order-independent, got ${r.distinct}`);
+  assert.equal(r.only, '<empty>', 'newer delete must win → K absent');
+});
+
+test('reduce determinism: newer set after delete resurrects (correct LWW), order-independent', () => {
+  const events = [
+    node('deleteNode', 'K', 3, 'devA', 0, null),
+    node('addNode', 'K', 7, 'devB', 0, 'B-newer'),
+  ];
+  const r = allPermsAgree(events);
+  assert.equal(r.distinct, 1);
+  assert.equal(r.only, 'K="B-newer"', 'newer set outranks older delete → K present');
+});
+
+test('reduce determinism: mixed multi-key event set is permutation-invariant (720 perms)', () => {
+  const events = [
+    node('addNode', 'K', 100, 'devA', 0, 'A0'),
+    node('addNode', 'K', 100, 'devA', 1, 'A1'),
+    node('addNode', 'K', 100, 'devB', 0, 'B0'),
+    node('deleteNode', 'K', 100, 'devC', 0, null), // devC highest deviceId at ts=100 → delete wins → K absent
+    node('addNode', 'L', 50, 'devA', 2, 'L-old'),
+    node('addNode', 'L', 90, 'devB', 0, 'L-new'),
+  ];
+  const r = allPermsAgree(events);
+  assert.equal(r.distinct, 1, `expected permutation-invariant materialize across ${r.count} permutations, got ${r.distinct}`);
+  assert.equal(r.only, 'L="L-new"', 'K deleted by highest-ranked devC; L resolves to newer L-new');
 });
