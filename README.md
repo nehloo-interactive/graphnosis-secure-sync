@@ -63,10 +63,15 @@ import { writeEvent, readEvents } from '@nehloo-interactive/graphnosis-secure-sy
 ## License
 
 [Functional Source License, Version 1.1, Apache 2.0 Future
-License](LICENSE) — `FSL-1.1-Apache-2.0`. Read, audit, fork, modify,
-self-host the code freely; commercial competing-service use is restricted
-during the 2-year exclusivity window after each release, after which the
-release auto-converts to Apache 2.0.
+License](LICENSE) — `FSL-1.1-Apache-2.0`. Read, audit, fork, modify, and
+self-host freely, including inside your organization for any internal
+purpose, commercial ones included.
+
+The single restriction during the 2-year exclusivity window after each
+release: you may not offer this library, or a modified version of it, to
+third parties as a hosted or embedded service whose value derives
+substantially from it. After that window, the release auto-converts to
+Apache 2.0.
 
 ---
 
