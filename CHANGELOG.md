@@ -2,6 +2,40 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.2] — 2026-07-27
+
+### Security
+
+- **Encrypted streams must now prove they are complete.** Each chunk was already
+  individually authenticated, so tampering was caught; what was not established is
+  that the stream being read is the whole stream. A reader now requires the
+  end-of-stream marker and rejects anything that follows it, so a partial payload
+  can no longer be returned as though it were the entire one.
+
+### Fixed
+
+- **Op-log writes are durable across shutdown.** The resume point is now recorded
+  from the entries actually written rather than from the in-memory counter, which
+  could run ahead while a write was still in flight and cause the next launch to
+  skip entries that never reached disk. A new `drain()` awaits the buffer and
+  should be called on shutdown.
+- **A failed op-log write no longer discards its batch.** Entries are returned to
+  the buffer and retried instead of being dropped when a write fails.
+- **Empty payloads encode explicitly.** An empty payload now writes one
+  end-marked chunk rather than none, so it is distinguishable from a stream
+  truncated to nothing. Reading an empty body stays backward compatible.
+
+### Tests
+
+- 10 added (33 total): end-marker enforcement across every chunk boundary,
+  data-after-end, empty round-trip, bit-flip and foreign-blob controls, resume-point
+  bounds, gap-free shutdown, and batch survival across a failed write.
+
+### Note
+
+- `package.json` was not bumped for 0.3.1; it moves to 0.3.2 here and matches the
+  tag again.
+
 ## [0.3.1] — 2026-07-26
 
 ### Security
