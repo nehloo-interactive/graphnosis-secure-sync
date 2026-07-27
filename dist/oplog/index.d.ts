@@ -28,6 +28,16 @@ export declare class OpLogWriter {
     constructor(opts: OpLogWriterOptions);
     private filePath;
     emit(partial: Omit<OpLogEvent, 'id' | 'ts' | 'deviceId' | 'sessionId' | 'seq'>): OpLogEvent;
+    /**
+     * Resolve once the buffer has drained. Call this before shutting down.
+     *
+     * `emit` allocates a rank and starts a flush without awaiting it, so at process
+     * exit the last batch can still be in memory while `persistSeq` has already
+     * recorded its ranks as consumed. The next launch then resumes past them and
+     * those events are gone for good — visible afterwards only as permanent gaps in
+     * the sequence. Draining is what makes shutdown lossless.
+     */
+    drain(): Promise<void>;
     flush(): Promise<void>;
 }
 /** The v2 file magic (written once at the start of a v2 op-log file). Exported

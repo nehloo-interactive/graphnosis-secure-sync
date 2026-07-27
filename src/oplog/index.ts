@@ -75,15 +75,39 @@ export class OpLogWriter {
       ...partial,
     };
     this.buffer.push(ev);
-    void this.flush();
+    // Fire-and-forget. A failure here is not lost: the batch is returned to the
+    // buffer and retried by the next emit or by drain().
+    void this.flush().catch(() => { /* buffered for retry */ });
     return ev;
+  }
+
+  /**
+   * Resolve once the buffer has drained. Call this before shutting down.
+   *
+   * `emit` allocates a rank and starts a flush without awaiting it, so at process
+   * exit the last batch can still be in memory while `persistSeq` has already
+   * recorded its ranks as consumed. The next launch then resumes past them and
+   * those events are gone for good — visible afterwards only as permanent gaps in
+   * the sequence. Draining is what makes shutdown lossless.
+   */
+  async drain(): Promise<void> {
+    for (let guard = 0; guard < 1000; guard++) {
+      if (!this.flushing && this.buffer.length === 0) return;
+      if (this.flushing) { await new Promise(r => setTimeout(r, 5)); continue; }
+      await this.flush();
+    }
+    throw new Error('OpLogWriter.drain: buffer did not settle');
   }
 
   async flush(): Promise<void> {
     if (this.flushing || this.buffer.length === 0) return;
     this.flushing = true;
+    // Taken out of the buffer BEFORE the awaits below, so it must be put back if
+    // any of them throw — otherwise a transient disk or crypto error silently
+    // discards the batch while its ranks stay consumed.
+    const batch = this.buffer.splice(0, this.buffer.length);
+    let wrote = false;
     try {
-      const batch = this.buffer.splice(0, this.buffer.length);
       const line = batch.map(e => JSON.stringify(e)).join('\n') + '\n';
       const ct = await encrypt(new TextEncoder().encode(line), this.opts.key, this.opts.salt);
 
@@ -104,10 +128,23 @@ export class OpLogWriter {
       // Restrictive perms: the op-log dir/files hold the user's (encrypted)
       // memory ops. 0o700 dir / 0o600 file (applies on creation).
       await fs.appendFile(this.filePath(), Buffer.from(payload), { mode: 0o600 });
-      await this.opts.persistSeq?.(this.seq);
+      wrote = true;
+      // Persist the rank actually WRITTEN, not `this.seq`. The counter runs ahead
+      // whenever `emit` was called while this flush was in flight, so persisting
+      // it marks ranks as durable that are still only in memory. Resuming from
+      // that mark skips them permanently.
+      const last = batch[batch.length - 1];
+      if (last && typeof last.seq === 'number') await this.opts.persistSeq?.(last.seq + 1);
+    } catch (e) {
+      this.buffer.unshift(...batch);
+      throw e;
     } finally {
       this.flushing = false;
-      if (this.buffer.length > 0) void this.flush();
+      // Only chain a retry after a SUCCESSFUL write — on failure the batch is back
+      // in the buffer, and re-entering here would spin on a persistent error.
+      if (wrote && this.buffer.length > 0) {
+        void this.flush().catch(() => { /* buffered for retry */ });
+      }
     }
   }
 }

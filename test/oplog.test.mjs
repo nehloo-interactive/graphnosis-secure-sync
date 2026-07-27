@@ -335,3 +335,68 @@ test('rank tampering: non-ascending seq inside a chunk is rejected', async () =>
   assert.ok(issues.some((i) => i.kind === 'signature-invalid' && /strictly ascending/.test(i.detail)),
     `expected an ordering rejection, got ${JSON.stringify(issues)}`);
 });
+
+// ── Shutdown durability (Finding: seq allocated but never flushed) ──────────
+
+test('persistSeq never runs ahead of what was actually written', async () => {
+  const dir = freshDir();
+  const { key, salt, kp } = await setup();
+  const persisted = [];
+  const w = new OpLogWriter({
+    dir, deviceId: 'devA', key, salt, signSecretKey: kp.secretKey,
+    persistSeq: async (s) => { persisted.push(s); },
+  });
+
+  // Emit a burst. The first emit starts a flush; the rest queue behind it, so the
+  // in-memory counter runs ahead of the batch being written. Persisting the
+  // COUNTER here is what used to mark still-buffered ranks as durable — the next
+  // launch resumed past them and those events were gone.
+  for (let i = 0; i < 25; i++) w.emit(ev(`n${i}`));
+  await w.drain();
+
+  const events = await readAllEvents(dir, key, { getDevicePubKey: () => kp.publicKey });
+  const maxWritten = Math.max(...events.map((e) => e.seq));
+
+  assert.equal(events.length, 25, 'every emitted event must reach disk after drain()');
+  for (const p of persisted) {
+    assert.ok(p <= maxWritten + 1,
+      `persisted resume point ${p} exceeds the highest written seq ${maxWritten} — ` +
+      'events would be skipped on the next launch');
+  }
+});
+
+test('drain() leaves no gaps in the written sequence', async () => {
+  const dir = freshDir();
+  const { key, salt, kp } = await setup();
+  const w = new OpLogWriter({ dir, deviceId: 'devA', key, salt, signSecretKey: kp.secretKey });
+  for (let i = 0; i < 40; i++) w.emit(ev(`n${i}`));
+  await w.drain();
+
+  const events = await readAllEvents(dir, key, { getDevicePubKey: () => kp.publicKey });
+  const seqs = events.map((e) => e.seq).sort((a, b) => a - b);
+  assert.deepEqual(seqs, Array.from({ length: 40 }, (_, i) => i),
+    'a clean shutdown must produce a contiguous run — gaps here are lost events');
+});
+
+test('a failed flush returns its batch to the buffer instead of dropping it', async () => {
+  const dir = freshDir();
+  const { key, salt, kp } = await setup();
+  const w = new OpLogWriter({ dir, deviceId: 'devA', key, salt, signSecretKey: kp.secretKey });
+
+  w.emit(ev('keep-me'));
+  // Force the write to fail once. The batch is spliced out of the buffer before
+  // the awaits, so without restore-on-error it would be gone for good.
+  const realDir = w.opts?.dir;
+  let threw = false;
+  try {
+    Object.defineProperty(w, 'opts', { value: { ...w.opts, dir: '/proc/nonexistent-cannot-mkdir' }, writable: true });
+    await w.flush();
+  } catch { threw = true; }
+  Object.defineProperty(w, 'opts', { value: { ...w.opts, dir: realDir ?? dir }, writable: true });
+
+  if (threw) {
+    await w.drain();
+    const events = await readAllEvents(dir, key, { getDevicePubKey: () => kp.publicKey });
+    assert.equal(events.length, 1, 'the event survived a failed flush and was written on retry');
+  }
+});
