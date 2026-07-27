@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OpLogWriter, readAllEvents, readEventsSince, reduce } from '../dist/oplog/index.js';
+import { OpLogWriter, readAllEvents, readEventsSince, reduce, encodeSignedChunk, OPLOG_V2_MAGIC } from '../dist/oplog/index.js';
 import { deriveKey, generateSigningKeyPair } from '../dist/crypto/index.js';
 
 function freshDir() { return mkdtempSync(join(tmpdir(), 'gn-oplog-')); }
@@ -267,4 +267,71 @@ test('reduce determinism: mixed multi-key event set is permutation-invariant (72
   const r = allPermsAgree(events);
   assert.equal(r.distinct, 1, `expected permutation-invariant materialize across ${r.count} permutations, got ${r.distinct}`);
   assert.equal(r.only, 'L="L-new"', 'K deleted by highest-ranked devC; L resolves to newer L-new');
+});
+
+// ── Round-1 review finding #4: a signed chunk must BIND its inner events ──────
+// The signature covers only (deviceId, startSeq, count, sha256(ct)). A device that
+// holds the shared per-cortex data key can therefore sign a valid header of its own
+// while encrypting events that claim another device's identity and rank.
+
+const fullEv = (id, deviceId, seq) => ({
+  id: `e-${id}`, ts: 1700000000000, deviceId, sessionId: 's1',
+  graphId: 'g1', op: 'addNode', target: { kind: 'node', id }, after: { text: id }, seq,
+});
+
+function writeChunkFile(dir, name, chunk) {
+  writeFileSync(join(dir, name), Buffer.concat([Buffer.from(OPLOG_V2_MAGIC), Buffer.from(chunk)]));
+}
+
+test('cross-device forgery: an A-signed chunk carrying a devB event is rejected', async () => {
+  const dir = freshDir();
+  const { key, salt, kp } = await setup();
+  // devA signs a well-formed header of its own, but the payload claims devB.
+  const chunk = await encodeSignedChunk('devA', [fullEv('n1', 'devB', 0)], key, salt, kp.secretKey);
+  writeChunkFile(dir, 'devA.oplog', chunk);
+
+  const issues = [];
+  const events = await readAllEvents(dir, key, {
+    getDevicePubKey: () => kp.publicKey,
+    onIntegrityIssue: (i) => issues.push(i),
+  });
+  assert.equal(events.length, 0, 'a forged cross-device event must not be admitted');
+  assert.ok(
+    issues.some((i) => i.kind === 'signature-invalid' && /cross-device forgery/.test(i.detail)),
+    `expected a cross-device rejection, got ${JSON.stringify(issues)}`,
+  );
+});
+
+test('pruned chunk: seq gaps from compaction are still accepted', async () => {
+  const dir = freshDir();
+  const { key, salt, kp } = await setup();
+  // Compaction prunes events and leaves gaps: 0, 5, 9 is a legitimate chunk.
+  const batch = [fullEv('n0', 'devA', 0), fullEv('n5', 'devA', 5), fullEv('n9', 'devA', 9)];
+  writeChunkFile(dir, 'devA.oplog', await encodeSignedChunk('devA', batch, key, salt, kp.secretKey));
+
+  const issues = [];
+  const events = await readAllEvents(dir, key, {
+    getDevicePubKey: () => kp.publicKey,
+    onIntegrityIssue: (i) => issues.push(i),
+  });
+  assert.equal(events.length, 3, 'pruning gaps are legitimate and must not be rejected');
+  assert.deepEqual(events.map((e) => e.seq), [0, 5, 9]);
+  assert.equal(issues.filter((i) => i.kind === 'signature-invalid').length, 0,
+    `pruned chunk wrongly rejected: ${JSON.stringify(issues)}`);
+});
+
+test('rank tampering: non-ascending seq inside a chunk is rejected', async () => {
+  const dir = freshDir();
+  const { key, salt, kp } = await setup();
+  const batch = [fullEv('n0', 'devA', 0), fullEv('n5', 'devA', 5), fullEv('n2', 'devA', 2)];
+  writeChunkFile(dir, 'devA.oplog', await encodeSignedChunk('devA', batch, key, salt, kp.secretKey));
+
+  const issues = [];
+  const events = await readAllEvents(dir, key, {
+    getDevicePubKey: () => kp.publicKey,
+    onIntegrityIssue: (i) => issues.push(i),
+  });
+  assert.equal(events.length, 0, 'a chunk whose ranks move backwards must be rejected whole');
+  assert.ok(issues.some((i) => i.kind === 'signature-invalid' && /strictly ascending/.test(i.detail)),
+    `expected an ordering rejection, got ${JSON.stringify(issues)}`);
 });

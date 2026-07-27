@@ -2,6 +2,21 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.1] — 2026-07-26
+
+### Security
+
+- **Strengthened op-log chunk verification.** The events inside a signed chunk
+  are now bound to the header that signs them — a chunk whose contents disagree
+  with what its signature actually covers is rejected whole rather than
+  partially trusted.
+
+### Tests
+
+- Added coverage for chunk/header agreement and for event ordering within a
+  chunk, plus a regression guard asserting that chunks pruned by compaction —
+  which legitimately leave sequence gaps — remain valid. Suite green (23).
+
 ## [0.3.0] — 2026-06-23
 
 ### Changed

@@ -227,16 +227,72 @@ async function readV2File(u8, name, passphraseOrKey, opts, issue) {
                 detail: `decrypt failed: ${e instanceof Error ? e.message : String(e)}` });
             continue;
         }
+        // ── Bind the decrypted events to the SIGNED header ──────────────────────
+        // The signature covers only (deviceId, startSeq, count, sha256(ct)). Without
+        // the checks below, a device that holds the shared per-cortex data key can sign
+        // a well-formed header of its own while encrypting events that claim ANOTHER
+        // device's id and rank; the reducer would then attribute and order them as that
+        // device. That is the forgery v2 exists to prevent, so a chunk that fails any
+        // check is rejected whole rather than partially trusted.
+        //
+        // Note on seq: compaction prunes events and legitimately leaves gaps inside a
+        // chunk (see encodeSignedChunk), so contiguity CANNOT be required. What is
+        // bindable is: the count is signed, startSeq is defined as the first event's
+        // seq, and ranks must not move backwards.
+        const candidates = [];
+        let lineMalformed = false;
         for (const ln of new TextDecoder().decode(pt).split('\n')) {
             if (!ln)
                 continue;
             try {
-                events.push(JSON.parse(ln));
+                candidates.push(JSON.parse(ln));
             }
             catch {
                 issue({ kind: 'malformed', deviceId, file: name, detail: 'decrypted line not JSON' });
+                lineMalformed = true;
             }
         }
+        if (lineMalformed)
+            continue;
+        const reject = (detail) => {
+            issue({ kind: 'signature-invalid', deviceId, file: name, detail });
+        };
+        if (candidates.length !== count) {
+            reject(`chunk header signs ${count} event(s) but the payload carries ` +
+                `${candidates.length}; chunk rejected`);
+            continue;
+        }
+        const foreign = candidates.find(ev => ev.deviceId !== deviceId);
+        if (foreign) {
+            reject(`chunk signed by "${deviceId}" carries an event claiming ` +
+                `deviceId="${foreign.deviceId}"; chunk rejected (cross-device forgery)`);
+            continue;
+        }
+        const unranked = candidates.find(ev => typeof ev.seq !== 'number');
+        if (unranked) {
+            reject(`v2 chunk carries an event with no seq; chunk rejected`);
+            continue;
+        }
+        if (candidates[0].seq !== startSeq) {
+            reject(`chunk header signs startSeq ${startSeq} but the first event has seq ` +
+                `${candidates[0].seq}; chunk rejected`);
+            continue;
+        }
+        // Gaps are permitted (pruning); backwards or repeated ranks are not.
+        let prevSeq = -1;
+        const misordered = candidates.some(ev => {
+            const s = ev.seq;
+            if (s <= prevSeq)
+                return true;
+            prevSeq = s;
+            return false;
+        });
+        if (misordered) {
+            reject(`chunk events are not strictly ascending in seq from ${startSeq}; ` +
+                `chunk rejected`);
+            continue;
+        }
+        events.push(...candidates);
     }
     return events;
 }
