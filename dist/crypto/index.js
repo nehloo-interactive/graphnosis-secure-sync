@@ -49,9 +49,14 @@ export async function encrypt(plaintext, key, salt) {
     const { state, header } = sodium.crypto_secretstream_xchacha20poly1305_init_push(key);
     const chunkSize = 64 * 1024;
     const chunks = [];
-    for (let offset = 0; offset < plaintext.length; offset += chunkSize) {
+    // Empty plaintext still gets ONE chunk, carrying TAG_FINAL. Without it an empty
+    // payload would encode as zero chunks, which is indistinguishable from a stream
+    // truncated to nothing — and `decrypt` now requires a FINAL tag to accept a
+    // stream at all. Reading an empty body stays backward compatible (see decrypt).
+    const lastOffset = Math.max(0, Math.ceil(plaintext.length / chunkSize) - 1) * chunkSize;
+    for (let offset = 0; offset <= lastOffset; offset += chunkSize) {
         const end = Math.min(offset + chunkSize, plaintext.length);
-        const isFinal = end === plaintext.length;
+        const isFinal = offset === lastOffset;
         const tag = isFinal
             ? sodium.crypto_secretstream_xchacha20poly1305_TAG_FINAL
             : sodium.crypto_secretstream_xchacha20poly1305_TAG_MESSAGE;
@@ -78,7 +83,23 @@ export async function decrypt(ciphertext, passphraseOrKey) {
         : passphraseOrKey;
     const state = sodium.crypto_secretstream_xchacha20poly1305_init_pull(header, key);
     const out = [];
+    // COMPLETENESS, as distinct from authenticity.
+    //
+    // Every chunk is individually authenticated, so a flipped bit is always caught.
+    // What that does NOT establish is that the stream we read is the WHOLE stream:
+    // secretstream marks the end with TAG_FINAL, and a reader that simply stops when
+    // it runs out of bytes cannot tell a complete stream from one whose trailing
+    // chunks were removed. Cutting at a chunk boundary leaves every surviving chunk
+    // valid, so truncation returns an authenticated PREFIX of the real plaintext with
+    // no error at all — silent, partial data presented as if it were everything.
+    //
+    // So the end marker is now required, and nothing may follow it.
+    const bodyStart = cursor;
+    let finalSeen = false;
     while (cursor < ciphertext.length) {
+        if (finalSeen) {
+            throw new Error('Encrypted stream has data after its final chunk (tampered file)');
+        }
         const len = new DataView(ciphertext.buffer, ciphertext.byteOffset + cursor, 4).getUint32(0, true);
         cursor += 4;
         const chunk = ciphertext.subarray(cursor, cursor + len);
@@ -88,7 +109,16 @@ export async function decrypt(ciphertext, passphraseOrKey) {
             throw new Error('Decryption failed (wrong passphrase or tampered file)');
         out.push(r.message);
         if (r.tag === sodium.crypto_secretstream_xchacha20poly1305_TAG_FINAL)
-            break;
+            finalSeen = true;
+    }
+    if (!finalSeen) {
+        // A body of zero bytes is the one legitimate case with no FINAL tag: writers
+        // before this change encoded empty plaintext as zero chunks. Accept it (there
+        // is no partial data to be misled by — the result is empty either way) and
+        // reject everything else, which is a stream that started and did not finish.
+        if (cursor === bodyStart)
+            return new Uint8Array(0);
+        throw new Error('Encrypted stream is truncated (ended before its final chunk)');
     }
     return concat(out);
 }
