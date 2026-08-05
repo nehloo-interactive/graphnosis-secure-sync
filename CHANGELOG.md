@@ -2,6 +2,149 @@
 
 All notable changes to this package are documented here.
 
+## [0.4.0] — 2026-08-03
+
+Federated recall stops being all-or-nothing, stops paying twice for the same
+memory, and stops hiding what it did not read.
+
+**This release breaks compilation for every consumer of `federatedQuery`, on
+purpose.** The old return type let a caller reach `prompt` and send it to a
+model without ever discovering that an engram had failed — a partial answer and
+a complete one were the same shape, so "your engram holds no such memory" and
+"we could not read your engram" arrived indistinguishable. The result is now a
+discriminated union on `complete`, and `prompt` exists only on the complete
+branch. Every one of the sites it breaks is a place that could have shipped a
+silent false negative to a user; the compiler now stops there instead. Note that
+the app replaces this module's `renderPrompt` with its own rich render, so its
+disclosure of a gap has to come from `failures`, not from the rendered banner.
+
+**Migration cost, measured.** Typechecking `apps/desktop-sidecar` against this
+draft — app worktree unchanged, SDK held constant, only this package swapped for
+0.3.x — produces **33 errors across 7 files**: `mcp-server.ts` (15), `ipc.ts`
+(5), `brain-engine.ts` (5), `host/recall-methods.ts` (4), `agent-tools.ts` (2),
+`skill-trainer.ts` (1), `goal-tracker.ts` (1). 24 are `prompt` on an unnarrowed
+result; 9 are a count read off an unnarrowed audit row. All 33 are the consumer
+not having adopted the new API — none indicates a defect in this module, and all
+33 clear with call-site narrowing alone, with no loosening of these types. An
+earlier draft of this entry claimed "six sites in `host/recall-methods.ts` (lines
+45, 83, 103, 130, 419 and 577)"; that was never measured and every part of it was
+wrong, including the file count. Numbers here now come from a run.
+
+**What the compiler will NOT catch — audit these by hand.** `audit.length` and
+any count derived from it typecheck identically before and after, so a consumer
+that only counts rows migrates silently:
+- A **failed** engram is still a row in `audit`. Anything of the form
+  `audit.length - contributing.length` will report it as "searched, no matches"
+  — the exact false negative this release exists to remove. The row carries no
+  counts, so the `contributing` filter beside it fails to compile and forces you
+  to the site; the subtraction on the next line is yours to fix.
+- `audit` no longer contains withheld engrams at all (see below), so its length
+  keeps its 0.3.x meaning: engrams asked.
+
+### Changed
+
+- **`federatedQuery` returns a discriminated union.** `{ complete: true, prompt,
+  … }` or `{ complete: false, failures, partialPrompt, … }`. Consumers must
+  narrow on `complete`; the incomplete branch names its rendering
+  `partialPrompt` so that reading a context assembled from unread engrams is an
+  explicit act at the call site rather than a field nobody inspects. Partial
+  evidence is never discarded — `byGraph`, `audit` and the counts are on both
+  branches.
+- **`audit` is `QueriedGraphAudit[]` — a union of `AnsweredGraphAudit |
+  FailedGraphAudit` — and withheld engrams move to their own `withheld` array.**
+  `AttachedGraphAudit` is gone. Reading `nodesIncluded` off an audit row now
+  requires narrowing on `status`, which is what makes the "a row with zero nodes
+  means the engram had no matches" misreading fail to compile: a failed row
+  carries no counts at all, because a zero on it means "unknown".
+
+  Withheld rows are in a separate array rather than merged into `audit`, which
+  reverses an earlier draft of this release. Refusing to put counts ON a
+  withheld row does not close the channel if the row still lands in the array a
+  caller COUNTS. Merged, `sub.audit.length` silently grew by the number of
+  withheld engrams, and the desktop app's "(N other engram(s) searched, no
+  matches.)" footer — text that reaches the model — went from 1 to 3 on a scope
+  holding one `sensitive` and one `shareWithAi: false` engram, telling the model
+  how many engrams the user is holding back. Measured against both builds, not
+  inferred. It was also the one hazard the union could not flag, since
+  `audit.length` typechecks the same either way, and it survived a careful
+  migration: adopting the compiler's demands at the site above leaves the
+  subtraction on the next line still wrong. Separating the arrays closes it
+  structurally, and serves the original goal better — telling a deliberately
+  withheld engram from one that was never in scope is now a direct read of
+  `sub.withheld`, with no join against the requested ids.
+- **`shouldShare` is defined in terms of the new `withholdReason`.** One
+  implementation of the rule, so an audit can never claim a different reason
+  than the filter actually used. Behaviour is unchanged.
+
+### Fixed
+
+- **One failing engram no longer costs the user every other engram's answer.**
+  The per-graph queries ran under `Promise.all`, so a single rejection threw
+  away every result that had arrived. They now settle independently, and each
+  failure becomes both a `status: 'failed'` audit row and a `GraphFailure`
+  carrying the engram's tier and whether it errored or timed out. A failed
+  engram is disclosed to the model in the rendered context, so it cannot assert
+  an absence it never verified.
+- **An engram that hangs can no longer stall a recall forever.** Tolerating
+  failure did nothing for a promise that never settles — a stalled mount or a
+  lock held open left the whole recall waiting with no error, no result and no
+  end. Every runner call now races a per-graph timeout. The clock necessarily
+  starts at dispatch, because the runner contract gives federation no way to
+  observe when a queued call actually begins, so the default allowance grows
+  with the number of engrams in scope (15s, plus 5s per additional engram)
+  rather than punishing an engram for the queue ahead of it. This is
+  timeout-and-ignore, not cancellation: real cancellation needs an `AbortSignal`
+  through `FederatedQueryRunner` and is deliberately left for a later decision.
+- **The same memory in two engrams no longer buys itself twice.** With no dedup
+  of any kind, a note synced between two devices spent the token budget twice
+  and displaced distinct evidence. Content is now collapsed before budgeting.
+  Nothing is ever dropped on a hash match alone: the fingerprint is a bucket
+  key and the normalized content is compared inside the bucket, so two different
+  memories that collide under 32-bit DJB2 both survive — the failure mode that
+  silently deleted evidence in the SDK's own federation path. Which copy
+  survives is deterministic (lowest sensitivity tier first, then the existing
+  score / graphId / nodeId order), so a duplicate never charges the scarce
+  `sensitive` cap for content a public engram already provides.
+- **Withheld engrams are reported instead of vanishing.**
+  `shareableGraphs` filters before the audit is built, so a `sensitive` engram
+  excluded by tier and a `shareWithAi: false` engram excluded by flag were
+  absent from the result entirely — the record that PROVES the privacy guarantee
+  fired was the one record dropped, and no consumer could tell a deliberately
+  withheld engram from one that was never in scope without joining the audit
+  against the ids it had requested. Every requested engram is now accounted for
+  exactly once, across `audit` (asked) and `withheld` (kept out), each in request
+  order; a withheld row states which rule withheld it (`sensitive-tier` vs
+  `sharing-disabled`). It carries the graphId, tier, status and reason and
+  nothing else — no counts of any kind, structurally, and it is not in the array
+  callers aggregate, because a record that proves an engram was not read must not
+  become a channel for inferring what is in it, by count any more than by field.
+  Withheld engrams are never named in the model-facing context, since disclosing
+  the withholding would disclose the engram — and that is now structural too,
+  since `renderPrompt` is only ever handed `audit`.
+
+### Added
+
+- `FederatedQueryOptions` (`{ timeoutMs }`) as an optional final argument to
+  `federatedQuery`, and `resolveTimeoutMs(graphCount)` for the default.
+- `federationFailures(sub)`, `contentFingerprint(text)`, and the
+  `withholdReason` / `WithheldReason` pair in the policy module.
+
+### Tests
+
+- 41 added (74 total). 32 exercise federation's arithmetic against injected
+  runners; 9 run against a real seven-engram `.gai` cortex through the
+  conformance fixture's `FederatedQueryRunner`, including a genuine 32-bit DJB2
+  collision, a 454-content duplicate pair across two engrams at different tiers,
+  a corrupt engram and a never-settling one. Two of the 41 pin the count channel
+  specifically: that a withheld engram does not move `audit.length`, and that a
+  failed engram cannot be summed into "searched, no matches". The fixture is not vendored — those
+  tests skip when it is absent, and `MOCK_CORTEX_RUNNER` points them at a
+  non-default checkout.
+- Every fix was verified differentially against the pre-fix module compiled from
+  the previous commit, so each test is known to fail against the code it
+  replaces. The compile-time half of the union guarantee is checked with a `tsc`
+  probe rather than a runtime assertion.
+
 ## [0.3.2] — 2026-07-27
 
 ### Security

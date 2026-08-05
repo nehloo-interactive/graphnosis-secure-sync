@@ -12,7 +12,20 @@ import { deriveKey, generateSigningKeyPair } from '../dist/crypto/index.js';
 
 function freshDir() { return mkdtempSync(join(tmpdir(), 'gn-oplog-')); }
 const ev = (id) => ({ graphId: 'g1', op: 'addNode', target: { kind: 'node', id }, after: { text: id } });
-async function flushAll(w) { await w.flush(); await new Promise((r) => setTimeout(r, 30)); }
+/**
+ * Wait for the writer's buffer to actually settle before reading the log back.
+ *
+ * This used to be `flush()` followed by a 30ms sleep, which is not a
+ * synchronisation primitive: `flush()` writes what is buffered when it is
+ * called, and an emit still in flight lands after it. The sleep hid that on an
+ * idle machine and stopped hiding it under load — 5 failures in 8 runs with 12
+ * busy cores, reading back 1 of 3 events, or missing a clamp issue for an event
+ * that had not been written yet. `drain()` (added in 0.3.2 for exactly this)
+ * loops until the buffer is empty and throws if it never settles, so a genuine
+ * durability regression fails loudly instead of arriving as a flake. Same load,
+ * same 8 runs, 0 failures.
+ */
+async function flushAll(w) { await w.drain(); }
 
 async function setup() {
   const { key, salt } = await deriveKey('test-pass');

@@ -1,11 +1,11 @@
 {
   "name": "@nehloo-interactive/graphnosis-secure-sync",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Local-first encrypted storage + sync primitives extracted from Graphnosis App. Device-key derivation, encrypted append-only oplog, multi-graph query federation with budgets, sensitivity-tiered redaction.",
   "author": "Nehloo Interactive LLC",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "FSL-1.1-ALv2",
   "repository": {
     "type": "git",
     "url": "https://github.com/nehloo-interactive/graphnosis-secure-sync.git"

@@ -13,7 +13,15 @@ export const TIER_CAPS = {
 export function tierOf(cfg, graphId) {
     return cfg.graphs.find(g => g.graphId === graphId)?.tier ?? 'personal';
 }
-export function shouldShare(cfg, graphId) {
+/**
+ * Why `shouldShare` refuses, or `undefined` when it does not.
+ *
+ * Exists so an audit can state WHICH guarantee fired for a withheld engram
+ * without re-deriving the rule and slowly diverging from the real decision:
+ * `shouldShare` is defined in terms of this function, so there is exactly one
+ * implementation of the rule and the audit cannot disagree with the filter.
+ */
+export function withholdReason(cfg, graphId) {
     const g = cfg.graphs.find(x => x.graphId === graphId);
     // Hard backstop: a `sensitive`-tier engram is NEVER federated to an AI,
     // regardless of its `shareWithAi` flag. The two axes are settable
@@ -21,8 +29,14 @@ export function shouldShare(cfg, graphId) {
     // safety derivation that normally forces shareWithAi=false for sensitive), so
     // this re-checks the tier here as an independent guard against that decoupling.
     if (g?.tier === 'sensitive')
-        return false;
-    return g ? g.shareWithAi : true;
+        return 'sensitive-tier';
+    if (g && !g.shareWithAi)
+        return 'sharing-disabled';
+    // No policy entry ⇒ shareable, unchanged.
+    return undefined;
+}
+export function shouldShare(cfg, graphId) {
+    return withholdReason(cfg, graphId) === undefined;
 }
 export function shareableGraphs(cfg, graphIds, allowGraphIds) {
     // `allowGraphIds` is an explicit allow-list for engrams the CALLER has already

@@ -39,15 +39,36 @@ export function tierOf(cfg: PolicyConfig, graphId: GraphId): SensitivityTier {
   return cfg.graphs.find(g => g.graphId === graphId)?.tier ?? 'personal';
 }
 
-export function shouldShare(cfg: PolicyConfig, graphId: GraphId): boolean {
+/** Why an engram is not shareable. Tier outranks the flag. */
+export type WithheldReason =
+  /** Its tier is not shareable with an AI at all. Overrides `shareWithAi`. */
+  | 'sensitive-tier'
+  /** `shareWithAi: false` — this engram is switched off for AI use. */
+  | 'sharing-disabled';
+
+/**
+ * Why `shouldShare` refuses, or `undefined` when it does not.
+ *
+ * Exists so an audit can state WHICH guarantee fired for a withheld engram
+ * without re-deriving the rule and slowly diverging from the real decision:
+ * `shouldShare` is defined in terms of this function, so there is exactly one
+ * implementation of the rule and the audit cannot disagree with the filter.
+ */
+export function withholdReason(cfg: PolicyConfig, graphId: GraphId): WithheldReason | undefined {
   const g = cfg.graphs.find(x => x.graphId === graphId);
   // Hard backstop: a `sensitive`-tier engram is NEVER federated to an AI,
   // regardless of its `shareWithAi` flag. The two axes are settable
   // independently (and an env-supplied GRAPHNOSIS_POLICY bypasses the host's
   // safety derivation that normally forces shareWithAi=false for sensitive), so
   // this re-checks the tier here as an independent guard against that decoupling.
-  if (g?.tier === 'sensitive') return false;
-  return g ? g.shareWithAi : true;
+  if (g?.tier === 'sensitive') return 'sensitive-tier';
+  if (g && !g.shareWithAi) return 'sharing-disabled';
+  // No policy entry ⇒ shareable, unchanged.
+  return undefined;
+}
+
+export function shouldShare(cfg: PolicyConfig, graphId: GraphId): boolean {
+  return withholdReason(cfg, graphId) === undefined;
 }
 
 export function shareableGraphs(cfg: PolicyConfig, graphIds: GraphId[], allowGraphIds?: GraphId[]): GraphId[] {
