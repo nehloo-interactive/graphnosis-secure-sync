@@ -3,15 +3,23 @@ export const DEFAULT_BUDGET = {
     maxNodes: 20,
     perGraphMinTokens: 200,
 };
+/** Map legacy `personal` → `deidentified`. Unknown / missing → deidentified. */
+export function normalizeSensitivityTier(raw) {
+    if (raw === 'public' || raw === 'deidentified' || raw === 'sensitive')
+        return raw;
+    if (raw === 'personal')
+        return 'deidentified';
+    return 'deidentified';
+}
 // Per-tier hard caps applied *after* the user-/AI-requested budget.
 // A request asking for 5000 tokens against a sensitive graph still gets ≤ 500.
 export const TIER_CAPS = {
     public: { maxTokens: 8_000, maxNodes: 50 },
-    personal: { maxTokens: 2_000, maxNodes: 20 },
+    deidentified: { maxTokens: 2_000, maxNodes: 20 },
     sensitive: { maxTokens: 500, maxNodes: 5 },
 };
 export function tierOf(cfg, graphId) {
-    return cfg.graphs.find(g => g.graphId === graphId)?.tier ?? 'personal';
+    return normalizeSensitivityTier(cfg.graphs.find(g => g.graphId === graphId)?.tier);
 }
 /**
  * Why `shouldShare` refuses, or `undefined` when it does not.
@@ -28,7 +36,7 @@ export function withholdReason(cfg, graphId) {
     // independently (and an env-supplied GRAPHNOSIS_POLICY bypasses the host's
     // safety derivation that normally forces shareWithAi=false for sensitive), so
     // this re-checks the tier here as an independent guard against that decoupling.
-    if (g?.tier === 'sensitive')
+    if (normalizeSensitivityTier(g?.tier) === 'sensitive')
         return 'sensitive-tier';
     if (g && !g.shareWithAi)
         return 'sharing-disabled';

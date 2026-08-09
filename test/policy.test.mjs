@@ -9,7 +9,9 @@ const cfg = {
   defaultBudget: DEFAULT_BUDGET,
   graphs: [
     { graphId: 'public-notes', shareWithAi: true, tier: 'public' },
-    { graphId: 'personal-misc', shareWithAi: true, tier: 'personal' },
+    { graphId: 'personal-misc', shareWithAi: true, tier: 'deidentified' },
+    // Legacy middle-tier alias still accepted on policy input.
+    { graphId: 'legacy-personal', shareWithAi: true, tier: 'personal' },
     // The dangerous decoupling: sensitive tier but shareWithAi flipped on.
     { graphId: 'secrets', shareWithAi: true, tier: 'sensitive' },
   ],
@@ -22,11 +24,12 @@ test('sensitive engram is never shareable even with shareWithAi:true', () => {
 test('non-sensitive engrams still honor shareWithAi', () => {
   assert.equal(shouldShare(cfg, 'public-notes'), true);
   assert.equal(shouldShare(cfg, 'personal-misc'), true);
+  assert.equal(shouldShare(cfg, 'legacy-personal'), true);
 });
 
 test('shareableGraphs excludes the sensitive engram', () => {
-  const out = shareableGraphs(cfg, ['public-notes', 'personal-misc', 'secrets']);
-  assert.deepEqual(out.sort(), ['personal-misc', 'public-notes']);
+  const out = shareableGraphs(cfg, ['public-notes', 'personal-misc', 'legacy-personal', 'secrets']);
+  assert.deepEqual(out.sort(), ['legacy-personal', 'personal-misc', 'public-notes']);
 });
 
 test('allowGraphIds lets an explicitly-consented sensitive engram through', () => {

@@ -1,10 +1,18 @@
 import type { GraphId, SubgraphBudget } from '../types.js';
-export type SensitivityTier = 'public' | 'personal' | 'sensitive';
+/**
+ * Canonical sensitivity ladder: public → deidentified → sensitive.
+ * Legacy middle-tier value `personal` is still accepted on GraphPolicy input
+ * and normalized to `deidentified` via {@link normalizeSensitivityTier}.
+ */
+export type SensitivityTier = 'public' | 'deidentified' | 'sensitive';
+/** Pre-rename middle tier — still accepted on read / policy config. */
+export type LegacySensitivityTierAlias = 'personal';
+export type SensitivityTierInput = SensitivityTier | LegacySensitivityTierAlias;
 export interface GraphPolicy {
     graphId: GraphId;
     shareWithAi: boolean;
-    /** Default `'personal'` if unset. Tightens the AI-visible budget per graph. */
-    tier?: SensitivityTier;
+    /** Default `'deidentified'` if unset. Tightens the AI-visible budget per graph. */
+    tier?: SensitivityTierInput;
     excludeNodeTypes?: string[];
     excludeTags?: string[];
 }
@@ -13,6 +21,8 @@ export interface PolicyConfig {
     graphs: GraphPolicy[];
 }
 export declare const DEFAULT_BUDGET: SubgraphBudget;
+/** Map legacy `personal` → `deidentified`. Unknown / missing → deidentified. */
+export declare function normalizeSensitivityTier(raw: unknown): SensitivityTier;
 export declare const TIER_CAPS: Record<SensitivityTier, {
     maxTokens: number;
     maxNodes: number;

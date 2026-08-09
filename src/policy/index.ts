@@ -5,13 +5,23 @@ import type { GraphId, SubgraphBudget } from '../types.js';
 // enforces this *after* the AI's requested budget — so a maxed-out `recall`
 // against a `sensitive` graph still only yields the tier's cap.
 
-export type SensitivityTier = 'public' | 'personal' | 'sensitive';
+/**
+ * Canonical sensitivity ladder: public → deidentified → sensitive.
+ * Legacy middle-tier value `personal` is still accepted on GraphPolicy input
+ * and normalized to `deidentified` via {@link normalizeSensitivityTier}.
+ */
+export type SensitivityTier = 'public' | 'deidentified' | 'sensitive';
+
+/** Pre-rename middle tier — still accepted on read / policy config. */
+export type LegacySensitivityTierAlias = 'personal';
+
+export type SensitivityTierInput = SensitivityTier | LegacySensitivityTierAlias;
 
 export interface GraphPolicy {
   graphId: GraphId;
   shareWithAi: boolean;
-  /** Default `'personal'` if unset. Tightens the AI-visible budget per graph. */
-  tier?: SensitivityTier;
+  /** Default `'deidentified'` if unset. Tightens the AI-visible budget per graph. */
+  tier?: SensitivityTierInput;
   excludeNodeTypes?: string[];
   excludeTags?: string[];
 }
@@ -27,16 +37,23 @@ export const DEFAULT_BUDGET: SubgraphBudget = {
   perGraphMinTokens: 200,
 };
 
+/** Map legacy `personal` → `deidentified`. Unknown / missing → deidentified. */
+export function normalizeSensitivityTier(raw: unknown): SensitivityTier {
+  if (raw === 'public' || raw === 'deidentified' || raw === 'sensitive') return raw;
+  if (raw === 'personal') return 'deidentified';
+  return 'deidentified';
+}
+
 // Per-tier hard caps applied *after* the user-/AI-requested budget.
 // A request asking for 5000 tokens against a sensitive graph still gets ≤ 500.
 export const TIER_CAPS: Record<SensitivityTier, { maxTokens: number; maxNodes: number }> = {
-  public:    { maxTokens: 8_000, maxNodes: 50 },
-  personal:  { maxTokens: 2_000, maxNodes: 20 },
-  sensitive: { maxTokens:   500, maxNodes:  5 },
+  public:       { maxTokens: 8_000, maxNodes: 50 },
+  deidentified: { maxTokens: 2_000, maxNodes: 20 },
+  sensitive:    { maxTokens:   500, maxNodes:  5 },
 };
 
 export function tierOf(cfg: PolicyConfig, graphId: GraphId): SensitivityTier {
-  return cfg.graphs.find(g => g.graphId === graphId)?.tier ?? 'personal';
+  return normalizeSensitivityTier(cfg.graphs.find(g => g.graphId === graphId)?.tier);
 }
 
 /** Why an engram is not shareable. Tier outranks the flag. */
@@ -61,7 +78,7 @@ export function withholdReason(cfg: PolicyConfig, graphId: GraphId): WithheldRea
   // independently (and an env-supplied GRAPHNOSIS_POLICY bypasses the host's
   // safety derivation that normally forces shareWithAi=false for sensitive), so
   // this re-checks the tier here as an independent guard against that decoupling.
-  if (g?.tier === 'sensitive') return 'sensitive-tier';
+  if (normalizeSensitivityTier(g?.tier) === 'sensitive') return 'sensitive-tier';
   if (g && !g.shareWithAi) return 'sharing-disabled';
   // No policy entry ⇒ shareable, unchanged.
   return undefined;

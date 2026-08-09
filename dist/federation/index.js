@@ -250,7 +250,7 @@ export function contentFingerprint(text) {
         h = (((h << 5) + h) + norm.charCodeAt(i)) | 0;
     return (h >>> 0).toString(16);
 }
-const TIER_RANK = { public: 0, personal: 1, sensitive: 2 };
+const TIER_RANK = { public: 0, deidentified: 1, sensitive: 2 };
 /**
  * Collapse candidates whose content is identical, keeping exactly one copy.
  *

@@ -95,7 +95,7 @@ test('incompleteness is on the result type, not just in a field', async () => {
 
   assert.deepEqual(sub.failures.map(f => f.graphId), ['broken']);
   assert.equal(sub.failures[0].reason, 'error');
-  assert.equal(sub.failures[0].tier, 'personal');
+  assert.equal(sub.failures[0].tier, 'deidentified');
   assert.match(sub.failures[0].error, /database is locked/);
   assert.deepEqual(federationFailures(sub), sub.failures);
 });

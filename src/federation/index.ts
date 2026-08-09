@@ -17,7 +17,7 @@ import {
 // The sidecar binds `runQuery` to Graphnosis' `query()` per graph.
 //
 // Budget enforcement happens in two layers:
-//   1. Per-graph tier cap (sensitive < personal < public) — applied BEFORE selection.
+//   1. Per-graph tier cap (sensitive < deidentified < public) — applied BEFORE selection.
 //   2. Global request budget — applied DURING selection across all graphs.
 // A request asking for 5000 tokens / 50 nodes against a `sensitive` graph
 // still gets ≤ 500 tokens / 5 nodes from that graph.
@@ -537,7 +537,7 @@ export function contentFingerprint(text: string): string {
   return (h >>> 0).toString(16);
 }
 
-const TIER_RANK: Record<SensitivityTier, number> = { public: 0, personal: 1, sensitive: 2 };
+const TIER_RANK: Record<SensitivityTier, number> = { public: 0, deidentified: 1, sensitive: 2 };
 
 /**
  * Collapse candidates whose content is identical, keeping exactly one copy.
