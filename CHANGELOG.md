@@ -2,6 +2,27 @@
 
 All notable changes to this package are documented here.
 
+## [0.4.1] — 2026-08-09
+
+Backward-compatible rename of the middle sensitivity tier.
+
+### Added
+
+- **`deidentified` is the canonical middle `SensitivityTier`.** Same caps as the
+  former `personal` tier (`maxTokens: 2000`, `maxNodes: 20`). Default when tier
+  is unset or unknown is now `deidentified`.
+- **`LegacySensitivityTierAlias` / `SensitivityTierInput`.** GraphPolicy still
+  accepts legacy `personal` on input; `normalizeSensitivityTier` and `tierOf`
+  normalize it to `deidentified` so existing configs keep working.
+
+### Changed
+
+- **`TIER_CAPS` key `personal` → `deidentified`.** Call sites that indexed
+  `TIER_CAPS.personal` must use `TIER_CAPS.deidentified` (or normalize first).
+- Federation withhold / share checks go through `normalizeSensitivityTier`, so
+  a policy still listing `tier: "personal"` behaves identically to
+  `deidentified`.
+
 ## [0.4.0] — 2026-08-03
 
 Federated recall stops being all-or-nothing, stops paying twice for the same
